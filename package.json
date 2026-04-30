@@ -1,0 +1,10 @@
+{
+  "name": "yawb-build-runner",
+  "type": "module",
+  "scripts": {
+    "start": "node worker.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
