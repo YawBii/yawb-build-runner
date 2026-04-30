@@ -1,10 +1,9 @@
 {
-  "name": "yawb-build-runner",
   "type": "module",
   "scripts": {
-    "start": "node worker.mjs"
+    "start": "node worker.mjs",
+    "build": "node -e \"console.log('yawB build runner proof OK')\"",
+    "typecheck": "node -e \"console.log('yawB typecheck runner proof OK')\""
   },
-  "engines": {
-    "node": ">=20"
-  }
+  "dependencies": {}
 }
