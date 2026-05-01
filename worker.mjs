@@ -1,10 +1,20 @@
-
 import http from "node:http";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.BUILD_RUNNER_TOKEN || "";
 const CWD = process.env.BUILD_CWD || process.cwd();
+
+function fp(value) {
+  if (!value) return "missing";
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 10);
+}
+
+function getBearer(req) {
+  const auth = req.headers["authorization"] || "";
+  return auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+}
 
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -14,6 +24,25 @@ function sendJson(res, status, body) {
 function tail(text, max = 4000) {
   if (!text) return "";
   return text.length > max ? text.slice(text.length - max) : text;
+}
+
+function invalidTokenResponse(req, res, extra = {}) {
+  const receivedToken = getBearer(req);
+
+  sendJson(res, 401, {
+    ok: false,
+    exitCode: null,
+    stdout: "",
+    stderr: "",
+    durationMs: 0,
+    error: "invalid bearer token",
+    tokenDebug: {
+      expectedFingerprint: fp(TOKEN),
+      receivedFingerprint: fp(receivedToken),
+      receivedAuthHeader: receivedToken ? "present" : "missing",
+    },
+    ...extra,
+  });
 }
 
 function runCommand(command) {
@@ -70,10 +99,21 @@ function runCommand(command) {
 http
   .createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/health") {
+      if (TOKEN && getBearer(req) !== TOKEN) {
+        invalidTokenResponse(req, res, {
+          service: "yawb-build-runner",
+        });
+        return;
+      }
+
       sendJson(res, 200, {
         ok: true,
         service: "yawb-build-runner",
         cwd: CWD,
+        tokenDebug: {
+          expectedFingerprint: fp(TOKEN),
+          receivedAuthHeader: getBearer(req) ? "present" : "missing",
+        },
       });
       return;
     }
@@ -83,23 +123,9 @@ http
       return;
     }
 
-    if (TOKEN) {
-      const auth = req.headers.authorization || "";
-      const token = auth.toLowerCase().startsWith("bearer ")
-        ? auth.slice(7).trim()
-        : "";
-
-      if (token !== TOKEN) {
-        sendJson(res, 401, {
-          ok: false,
-          exitCode: null,
-          stdout: "",
-          stderr: "",
-          durationMs: 0,
-          error: "invalid bearer token",
-        });
-        return;
-      }
+    if (TOKEN && getBearer(req) !== TOKEN) {
+      invalidTokenResponse(req, res);
+      return;
     }
 
     let raw = "";
@@ -141,4 +167,5 @@ http
   .listen(PORT, () => {
     console.log(`yawb build runner listening on port ${PORT}`);
     console.log(`cwd: ${CWD}`);
+    console.log(`token fingerprint: ${fp(TOKEN)}`);
   });
