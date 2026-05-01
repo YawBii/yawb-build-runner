@@ -1,38 +1,46 @@
+
 import http from "node:http";
 import { spawn } from "node:child_process";
 
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.BUILD_RUNNER_TOKEN || "";
-const BUILD_CWD = process.env.BUILD_CWD || process.cwd();
+const CWD = process.env.BUILD_CWD || process.cwd();
 
-function tail(str, max = 8000) {
-  return str.length <= max ? str : str.slice(str.length - max);
-}
-
-function json(res, status, body) {
+function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function tail(text, max = 4000) {
+  if (!text) return "";
+  return text.length > max ? text.slice(text.length - max) : text;
 }
 
 function runCommand(command) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
 
+    console.log("[build-runner] running:", command);
+
     const child = spawn(command, {
       shell: true,
-      cwd: BUILD_CWD,
+      cwd: CWD,
       env: process.env,
     });
 
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (d) => {
-      stdout += d.toString();
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      process.stdout.write(text);
     });
 
-    child.stderr.on("data", (d) => {
-      stderr += d.toString();
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      process.stderr.write(text);
     });
 
     child.on("error", (err) => {
@@ -61,18 +69,28 @@ function runCommand(command) {
 
 http
   .createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/health") {
+      sendJson(res, 200, {
+        ok: true,
+        service: "yawb-build-runner",
+        cwd: CWD,
+      });
+      return;
+    }
+
     if (req.method !== "POST") {
-      return json(res, 405, { ok: false, error: "method not allowed" });
+      sendJson(res, 405, { ok: false, error: "method not allowed" });
+      return;
     }
 
     if (TOKEN) {
       const auth = req.headers.authorization || "";
-      const given = auth.toLowerCase().startsWith("bearer ")
+      const token = auth.toLowerCase().startsWith("bearer ")
         ? auth.slice(7).trim()
         : "";
 
-      if (given !== TOKEN) {
-        return json(res, 401, {
+      if (token !== TOKEN) {
+        sendJson(res, 401, {
           ok: false,
           exitCode: null,
           stdout: "",
@@ -80,6 +98,7 @@ http
           durationMs: 0,
           error: "invalid bearer token",
         });
+        return;
       }
     }
 
@@ -90,7 +109,7 @@ http
     try {
       payload = JSON.parse(raw);
     } catch {
-      return json(res, 400, {
+      sendJson(res, 400, {
         ok: false,
         exitCode: null,
         stdout: "",
@@ -98,29 +117,28 @@ http
         durationMs: 0,
         error: "invalid JSON body",
       });
+      return;
     }
 
-    const { command, kind, jobId, stepId, projectId } = payload;
-
-    if (!command || !kind || !jobId || !stepId || !projectId) {
-      return json(res, 400, {
+    const command = payload.command;
+    if (!command || typeof command !== "string") {
+      sendJson(res, 400, {
         ok: false,
         exitCode: null,
         stdout: "",
         stderr: "",
         durationMs: 0,
-        error: "missing command/kind/jobId/stepId/projectId",
+        error: "missing command",
       });
+      return;
     }
 
-    console.log(`[build-runner] ${kind} ${projectId} ${jobId} ${stepId}`);
-    console.log(`[build-runner] running: ${command}`);
+    console.log("[build-runner] job", payload.jobId, payload.stepId, payload.kind);
 
     const result = await runCommand(command);
-
-    return json(res, result.ok ? 200 : 502, result);
+    sendJson(res, result.ok ? 200 : 502, result);
   })
   .listen(PORT, () => {
     console.log(`yawb build runner listening on port ${PORT}`);
-    console.log(`cwd: ${BUILD_CWD}`);
+    console.log(`cwd: ${CWD}`);
   });
